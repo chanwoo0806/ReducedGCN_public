@@ -1,0 +1,13 @@
+# This file may be used to create an environment using:
+# conda create -n <env_name> python=3.7
+# conda activate <env_name>
+# conda install torch-spline-conv torch-cluster texttable networkx metis tqdm numpy pandas scipy scikit-learn pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.3 -c pytorch -c anaconda -c conda-forge -c ostrokach-forge
+
+# pip install -r <this file>
+torch-geometric==2.3.1
+torch-sparse==0.6.17
+torch-scatter==2.1.1
+ipykernel
+tensorboardX==2.6.2.2
+tensorboard==2.11.2
+pyyaml

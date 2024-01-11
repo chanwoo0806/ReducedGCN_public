@@ -1,0 +1,12 @@
+bpr_batch: 16384
+recdim: 64
+layer: 4
+lr: 0.005
+decay: 0.001
+groups: 64
+mlp_dropout: 0.0
+dataset: ml-1m
+model: rgcn
+topks: [1, 5, 10, 20]
+emb_weight: [1.5, 0.5]
+temp: 1.0

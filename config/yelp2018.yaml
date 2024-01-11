@@ -1,0 +1,12 @@
+bpr_batch: 8192
+recdim: 64
+layer: 7
+lr: 0.003
+decay: 0.0002
+groups: 4
+mlp_dropout: 0.0
+dataset: yelp2018
+model: rgcn
+topks: [1, 5, 10, 20]
+emb_weight: [1.5, 0.5]
+temp: 0.3
