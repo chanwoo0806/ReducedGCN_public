@@ -72,11 +72,17 @@ def set_config():
     config["emb_weight"] = args.emb_weight
     config["temp"] = args.temp
     config["groups"] = args.groups
+    
+    #RGCF
+    config["prune_threshold"] = args.prune_threshold
+    config["MIM_weight"] = args.MIM_weight
+    config["tau"] = args.tau
+    config["aug_ratio"] = args.aug_ratio
 
     all_dataset = ["yelp2018", "ml-1m", "ks10"]
     if args.dataset not in all_dataset:
         raise NotImplementedError(f"Haven't supported {args.dataset} yet!, try {all_dataset}")
-    all_models = ["rgcn"]
+    all_models = ["rgcn", "rgcf"]
     if args.model not in all_models:
         raise NotImplementedError(f"Haven't supported {args.model} yet!, try {all_models}")
     return config

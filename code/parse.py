@@ -72,6 +72,12 @@ def parse_args():
     )
     parser.add_argument("--temp", type=float, default=1.0, help="temperature")
     parser.add_argument("--groups", type=int, default=64, help="Number of sub-community")
+    
+    #RGCF
+    parser.add_argument("--prune_threshold", type=float, default=0.02)
+    parser.add_argument("--MIM_weight", type=float, default=1e-6)
+    parser.add_argument("--tau", type=float, default=0.2)
+    parser.add_argument("--aug_ratio", type=float, default=0.1)
 
     args = parser.parse_args()
 

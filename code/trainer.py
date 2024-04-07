@@ -35,7 +35,9 @@ def BPR_train_original(dataset, model, bpr, epoch, neg_k=1, w=None):
         )
     )
 
-    model.clustering()
+    if type(model).__name__ == "RGCN":
+        model.clustering()
+
     for batch_i, (batch_users, batch_pos, batch_neg) in train_loader:
         cri = bpr.stage_one(batch_users, batch_pos, batch_neg)
         aver_loss += cri

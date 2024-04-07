@@ -11,7 +11,7 @@ import datetime
 
 
 def load_model(model_name):
-    models = {"rgcn": model.RGCN}
+    models = {"rgcn": model.RGCN, "rgcf": model.RGCF}
     return models[model_name]
 
 

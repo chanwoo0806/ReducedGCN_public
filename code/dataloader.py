@@ -57,6 +57,7 @@ class Loader(Dataset):
             (np.ones(len(self.train_user)), (self.train_user, self.train_item)),
             shape=(self.n_user, self.m_item),
         )
+        self.interaction_matrix = self.user_item_net.tocoo().astype(np.float32)
         self.users_D = np.array(self.user_item_net.sum(axis=1)).squeeze()
         self.users_D[self.users_D == 0.0] = 1
         self.items_D = np.array(self.user_item_net.sum(axis=0)).squeeze()
