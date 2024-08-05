@@ -103,7 +103,7 @@ U |  _"\ u \| ___"|/|  _"\ U |"|u| |U /"___|\| ___"|/|  _"\ U /"___|uU /"___|| \
 ROOT_PATH = os.path.dirname(os.path.dirname(__file__))
 CODE_PATH = os.path.join(ROOT_PATH, "code")
 DATA_PATH = os.path.join(ROOT_PATH, "data")
-BOARD_PATH = os.path.join(CODE_PATH, "runs")
+BOARD_PATH = os.path.join(ROOT_PATH, "runs")
 if args.load:
     FOLDER_PATH = os.path.join(
         BOARD_PATH, os.path.join(args.dataset, os.path.join(args.model, args.load))
