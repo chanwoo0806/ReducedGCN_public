@@ -78,11 +78,14 @@ def set_config():
     config["MIM_weight"] = args.MIM_weight
     config["tau"] = args.tau
     config["aug_ratio"] = args.aug_ratio
+    
+    #AFD
+    config["alpha"] = args.alpha
 
     all_dataset = ["yelp2018", "ml-1m", "ks10"]
     if args.dataset not in all_dataset:
         raise NotImplementedError(f"Haven't supported {args.dataset} yet!, try {all_dataset}")
-    all_models = ["rgcn", "rgcf", "lgcn", "ngcf", "gccf"]
+    all_models = ["rgcn", "rgcf", "lgcn", "ngcf", "gccf", "afd_lgcn", "afd_ngcf", "afd_gccf"]
     if args.model not in all_models:
         raise NotImplementedError(f"Haven't supported {args.model} yet!, try {all_models}")
     return config

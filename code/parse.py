@@ -78,6 +78,9 @@ def parse_args():
     parser.add_argument("--MIM_weight", type=float, default=1e-6)
     parser.add_argument("--tau", type=float, default=0.2)
     parser.add_argument("--aug_ratio", type=float, default=0.1)
+    
+    #AFD
+    parser.add_argument("--alpha", type=float, default=0.1)
 
     args = parser.parse_args()
 

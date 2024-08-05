@@ -812,3 +812,265 @@ class GCCF(nn.Module):
         loss = torch.mean(torch.nn.functional.softplus(torch.clamp(neg_scores - pos_scores, min=1e-8, max=1)))
 
         return loss, reg_loss
+
+
+### AFD
+def calculate_correlation(x):
+    return x.T.corrcoef().triu(diagonal=1).norm()  
+    
+class AFD_LightGCN(LightGCN):
+    def __init__(self, config: dict, dataset):
+        super(AFD_LightGCN, self).__init__(config, dataset)
+        self.alpha = config['alpha']
+
+    def computer(self, require_embeddings_list=False):
+        users_emb = self.embedding_user.weight
+        items_emb = self.embedding_item.weight
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+        g_dropped = self.Graph
+            
+        for layer in range(self.n_layers):
+            all_emb = torch.sparse.mm(g_dropped, all_emb)
+            embs.append(all_emb)
+        embs_stack = torch.stack(embs, dim=1)
+        light_out = torch.mean(embs_stack, dim=1)
+        users, items = torch.split(light_out, [self.num_users, self.num_items])
+        
+        if require_embeddings_list:
+            return users, items, embs
+        else:
+            return users, items
+        
+    def get_embedding(self, users, pos_items, neg_items):
+        all_users, all_items, embs = self.computer(require_embeddings_list=True)
+        users_emb = all_users[users]
+        pos_emb = all_items[pos_items]
+        neg_emb = all_items[neg_items]
+        users_emb_ego = self.embedding_user(users)
+        pos_emb_ego = self.embedding_item(pos_items)
+        neg_emb_ego = self.embedding_item(neg_items)
+        return users_emb, pos_emb, neg_emb, users_emb_ego, pos_emb_ego, neg_emb_ego, embs
+
+    def bpr_loss(self, users, pos, neg):
+        (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0, embs) = self.get_embedding(
+            users.long(), pos.long(), neg.long()
+        )
+        
+        # reg loss
+        reg_loss = (
+            (1 / 2) * (user_emb_0.norm(2).pow(2) + pos_emb_0.norm(2).pow(2) + neg_emb_0.norm(2).pow(2)) / float(len(users))
+        )
+        
+        # BPR loss
+        pos_scores = torch.mul(users_emb, pos_emb)
+        pos_scores = torch.sum(pos_scores, dim=1)
+        neg_scores = torch.mul(users_emb, neg_emb)
+        neg_scores = torch.sum(neg_scores, dim=1)
+        bpr_loss = torch.mean(torch.nn.functional.softplus(neg_scores - pos_scores))
+        
+        # AFD loss
+        cor_loss_u, cor_loss_i = torch.zeros((1,)).to(self.config["device"]), torch.zeros((1,)).to(self.config["device"])
+
+        user_layer_correlations = []
+        item_layer_correlations = []
+        for i in range(1, self.n_layers + 1):
+            user_embeddings, item_embeddings = torch.split(embs[i], [self.num_users, self.num_items])
+            user_layer_correlations.append(calculate_correlation(user_embeddings))
+            item_layer_correlations.append(calculate_correlation(item_embeddings))
+
+        user_layer_correlations_coef = (1 / torch.tensor(user_layer_correlations)) / torch.sum(
+            1 / torch.tensor(user_layer_correlations))
+        item_layer_correlations_coef = (1 / torch.tensor(item_layer_correlations)) / torch.sum(
+            1 / torch.tensor(item_layer_correlations))
+
+        for i in range(1, self.n_layers + 1):
+            cor_loss_u += user_layer_correlations_coef[i - 1] * user_layer_correlations[i - 1]
+            cor_loss_i += item_layer_correlations_coef[i - 1] * item_layer_correlations[i - 1]
+            
+        
+        rec_loss = bpr_loss + self.alpha * cor_loss_u + self.alpha * cor_loss_i
+
+        return rec_loss, reg_loss
+    
+    
+class AFD_NGCF(NGCF):
+    def __init__(self, config: dict, dataset):
+        super(AFD_NGCF, self).__init__(config, dataset)
+        self.alpha = config['alpha']
+
+    def computer(self, require_embeddings_list=False):
+        users_emb = self.embedding_user.weight
+        items_emb = self.embedding_item.weight
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+
+        g_droped = self.Graph 
+        # if self.training:
+        #     g_droped = self.sparse_dropout(g_droped,
+        #                             0.1,
+        #                             g_droped._nnz()) 
+        
+        for layer in range(self.n_layers):
+            side_embeddings = torch.sparse.mm(g_droped, all_emb)
+            
+            # transformed sum messages of neighbors.
+            sum_embeddings = torch.matmul(side_embeddings, self.weight_dict['W_gc_%d' % layer]) \
+                                             + self.weight_dict['b_gc_%d' % layer]
+                                             
+            # bi messages of neighbors.
+            # element-wise productj
+            bi_embeddings = torch.mul(all_emb, side_embeddings)
+            # transformed bi messages of neighbors.
+            bi_embeddings = torch.matmul(bi_embeddings, self.weight_dict['W_bi_%d' % layer]) \
+                                            + self.weight_dict['b_bi_%d' % layer]
+
+            # non-linear activation.
+            all_emb = nn.LeakyReLU(negative_slope=0.2)(sum_embeddings + bi_embeddings)
+
+            # message dropout.
+            # all_emb = nn.Dropout(0.1)(all_emb)
+
+            # normalize the distribution of embeddings.
+            norm_embeddings = F.normalize(all_emb, p=2, dim=1)
+            embs.append(norm_embeddings)
+
+        out = torch.cat(embs, 1)
+        users, items = torch.split(out, [self.num_users, self.num_items])
+        
+        if require_embeddings_list:
+            return users, items, embs
+        else:
+            return users, items
+    
+    def get_embedding(self, users, pos_items, neg_items):
+        all_users, all_items, embs = self.computer(require_embeddings_list=True)
+        users_emb = all_users[users]
+        pos_emb = all_items[pos_items]
+        neg_emb = all_items[neg_items]
+        users_emb_ego = self.embedding_user(users)
+        pos_emb_ego = self.embedding_item(pos_items)
+        neg_emb_ego = self.embedding_item(neg_items)
+        return users_emb, pos_emb, neg_emb, users_emb_ego, pos_emb_ego, neg_emb_ego, embs
+
+    def bpr_loss(self, users, pos, neg):
+        (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0, embs) = self.get_embedding(
+            users.long(), pos.long(), neg.long()
+        )
+        
+        # reg loss
+        reg_loss = (
+            (1 / 2) * (user_emb_0.norm(2).pow(2) + pos_emb_0.norm(2).pow(2) + neg_emb_0.norm(2).pow(2)) / float(len(users))
+        )
+        
+        # BPR loss
+        pos_scores = torch.mul(users_emb, pos_emb)
+        pos_scores = torch.sum(pos_scores, dim=1)
+        neg_scores = torch.mul(users_emb, neg_emb)
+        neg_scores = torch.sum(neg_scores, dim=1)
+        bpr_loss = torch.mean(torch.nn.functional.softplus(neg_scores - pos_scores))
+        
+        # AFD loss
+        cor_loss_u, cor_loss_i = torch.zeros((1,)).to(self.config["device"]), torch.zeros((1,)).to(self.config["device"])
+
+        user_layer_correlations = []
+        item_layer_correlations = []
+        for i in range(1, self.n_layers + 1):
+            user_embeddings, item_embeddings = torch.split(embs[i], [self.num_users, self.num_items])
+            user_layer_correlations.append(calculate_correlation(user_embeddings))
+            item_layer_correlations.append(calculate_correlation(item_embeddings))
+
+        user_layer_correlations_coef = (1 / torch.tensor(user_layer_correlations)) / torch.sum(
+            1 / torch.tensor(user_layer_correlations))
+        item_layer_correlations_coef = (1 / torch.tensor(item_layer_correlations)) / torch.sum(
+            1 / torch.tensor(item_layer_correlations))
+
+        for i in range(1, self.n_layers + 1):
+            cor_loss_u += user_layer_correlations_coef[i - 1] * user_layer_correlations[i - 1]
+            cor_loss_i += item_layer_correlations_coef[i - 1] * item_layer_correlations[i - 1]
+            
+        
+        rec_loss = bpr_loss + self.alpha * cor_loss_u + self.alpha * cor_loss_i
+
+        return rec_loss, reg_loss
+
+
+class AFD_GCCF(GCCF):
+    def __init__(self, config: dict, dataset):
+        super(AFD_GCCF, self).__init__(config, dataset)
+        self.alpha = config['alpha']
+
+    def computer(self, require_embeddings_list=False):
+        users_emb = self.embedding_user.weight
+        items_emb = self.embedding_item.weight
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+
+        g_droped = self.Graph
+        
+        for layer in range(self.n_layers):
+            # all_emb = torch.sparse.mm(g_droped, all_emb) 
+            # all_emb = torch.matmul(all_emb, self.weight_dict['W_gc_%d' % layer]) \
+            #                                  + self.weight_dict['b_gc_%d' % layer]
+                                       
+            all_emb = torch.sparse.mm(g_droped, all_emb) #+ all_emb.mul(self.Degree)
+            embs.append(all_emb)
+
+        out = torch.cat(embs, 1)
+        users, items = torch.split(out, [self.num_users, self.num_items])
+        
+        if require_embeddings_list:
+            return users, items, embs
+        else:
+            return users, items
+    
+    def get_embedding(self, users, pos_items, neg_items):
+        all_users, all_items, embs = self.computer(require_embeddings_list=True)
+        users_emb = all_users[users]
+        pos_emb = all_items[pos_items]
+        neg_emb = all_items[neg_items]
+        users_emb_ego = self.embedding_user(users)
+        pos_emb_ego = self.embedding_item(pos_items)
+        neg_emb_ego = self.embedding_item(neg_items)
+        return users_emb, pos_emb, neg_emb, users_emb_ego, pos_emb_ego, neg_emb_ego, embs
+
+    def bpr_loss(self, users, pos, neg):
+        (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0, embs) = self.get_embedding(
+            users.long(), pos.long(), neg.long()
+        )
+        
+        # reg loss
+        reg_loss = (
+            (1 / 2) * (user_emb_0.norm(2).pow(2) + pos_emb_0.norm(2).pow(2) + neg_emb_0.norm(2).pow(2)) / float(len(users))
+        )
+        
+        # BPR loss
+        pos_scores = torch.mul(users_emb, pos_emb)
+        pos_scores = torch.sum(pos_scores, dim=1)
+        neg_scores = torch.mul(users_emb, neg_emb)
+        neg_scores = torch.sum(neg_scores, dim=1)
+        bpr_loss = torch.mean(torch.nn.functional.softplus(neg_scores - pos_scores))
+        
+        # AFD loss
+        cor_loss_u, cor_loss_i = torch.zeros((1,)).to(self.config["device"]), torch.zeros((1,)).to(self.config["device"])
+
+        user_layer_correlations = []
+        item_layer_correlations = []
+        for i in range(1, self.n_layers + 1):
+            user_embeddings, item_embeddings = torch.split(embs[i], [self.num_users, self.num_items])
+            user_layer_correlations.append(calculate_correlation(user_embeddings))
+            item_layer_correlations.append(calculate_correlation(item_embeddings))
+
+        user_layer_correlations_coef = (1 / torch.tensor(user_layer_correlations)) / torch.sum(
+            1 / torch.tensor(user_layer_correlations))
+        item_layer_correlations_coef = (1 / torch.tensor(item_layer_correlations)) / torch.sum(
+            1 / torch.tensor(item_layer_correlations))
+
+        for i in range(1, self.n_layers + 1):
+            cor_loss_u += user_layer_correlations_coef[i - 1] * user_layer_correlations[i - 1]
+            cor_loss_i += item_layer_correlations_coef[i - 1] * item_layer_correlations[i - 1]
+            
+        
+        rec_loss = bpr_loss + self.alpha * cor_loss_u + self.alpha * cor_loss_i
+
+        return rec_loss, reg_loss
