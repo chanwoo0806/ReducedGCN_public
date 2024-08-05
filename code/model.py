@@ -534,3 +534,281 @@ class RGCF(nn.Module):
             loss += self.MIM_weight * mutual_info
             
         return loss, reg_loss
+
+
+class LightGCN(nn.Module):
+    def __init__(self, config: dict, dataset):
+        super(LightGCN, self).__init__()
+        self.config = config
+        self.dataset = dataset
+        
+        self.__init_weight()
+        self.Graph = self.dataset.get_sparse_graph()
+        world.LOGGER.info(f"use normalized Graph(dropout:{self.config['dropout']})")
+
+    def __init_weight(self):
+        self.num_users = self.dataset.n_users
+        self.num_items = self.dataset.m_items
+        self.latent_dim = self.config["latent_dim_rec"]
+        self.n_layers = self.config["n_layers"]
+        
+        self.embedding_user = torch.nn.Embedding(num_embeddings=self.num_users, embedding_dim=self.latent_dim)
+        self.embedding_item = torch.nn.Embedding(num_embeddings=self.num_items, embedding_dim=self.latent_dim)
+        nn.init.xavier_uniform_(self.embedding_user.weight, gain=1)
+        nn.init.xavier_uniform_(self.embedding_item.weight, gain=1)
+        
+        self.f = nn.Sigmoid()
+        world.LOGGER.info('use xavier initilizer')
+
+    def computer(self):
+        users_emb = self.embedding_user.weight
+        items_emb = self.embedding_item.weight
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+        g_dropped = self.Graph
+            
+        for layer in range(self.n_layers):
+            all_emb = torch.sparse.mm(g_dropped, all_emb)
+            embs.append(all_emb)
+        embs = torch.stack(embs, dim=1)
+        light_out = torch.mean(embs, dim=1)
+        users, items = torch.split(light_out, [self.num_users, self.num_items])
+        return users, items
+
+    def get_users_rating(self, users):
+        all_users, all_items = self.computer()
+        users_emb = all_users[users.long()]
+        items_emb = all_items
+        rating = self.f(torch.matmul(users_emb, items_emb.t()))
+        return rating   
+        
+    def get_embedding(self, users, pos_items, neg_items):
+        all_users, all_items = self.computer()
+        users_emb = all_users[users]
+        pos_emb = all_items[pos_items]
+        neg_emb = all_items[neg_items]
+        users_emb_ego = self.embedding_user(users)
+        pos_emb_ego = self.embedding_item(pos_items)
+        neg_emb_ego = self.embedding_item(neg_items)
+        return users_emb, pos_emb, neg_emb, users_emb_ego, pos_emb_ego, neg_emb_ego
+
+    def bpr_loss(self, users, pos, neg):
+        (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0) = self.get_embedding(
+            users.long(), pos.long(), neg.long()
+        )
+        reg_loss = (
+            (1 / 2) * (user_emb_0.norm(2).pow(2) + pos_emb_0.norm(2).pow(2) + neg_emb_0.norm(2).pow(2)) / float(len(users))
+        )
+        pos_scores = torch.mul(users_emb, pos_emb)
+        pos_scores = torch.sum(pos_scores, dim=1)
+        neg_scores = torch.mul(users_emb, neg_emb)
+        neg_scores = torch.sum(neg_scores, dim=1)
+
+        loss = torch.mean(torch.nn.functional.softplus(neg_scores - pos_scores))
+
+        return loss, reg_loss
+    
+    
+class NGCF(nn.Module):
+    def __init__(self, config: dict, dataset):
+        super(NGCF, self).__init__()
+        self.config = config
+        self.dataset = dataset
+        
+        self.__init_weight()
+        self.Graph = self.dataset.get_sparse_graph()
+        world.LOGGER.info(f"use normalized Graph(dropout:{self.config['dropout']})")
+
+    def __init_weight(self):
+        self.num_users = self.dataset.n_users
+        self.num_items = self.dataset.m_items
+        self.latent_dim = self.config["latent_dim_rec"]
+        self.n_layers = self.config["n_layers"]
+        
+        self.embedding_user = torch.nn.Embedding(num_embeddings=self.num_users, embedding_dim=self.latent_dim)
+        self.embedding_item = torch.nn.Embedding(num_embeddings=self.num_items, embedding_dim=self.latent_dim)
+        nn.init.xavier_uniform_(self.embedding_user.weight, gain=1)
+        nn.init.xavier_uniform_(self.embedding_item.weight, gain=1)
+        
+        initializer = nn.init.xavier_uniform_        
+        self.weight_dict = nn.ParameterDict()
+        layers = [self.latent_dim for i in range(self.n_layers)] + [self.latent_dim]
+        for k in range(self.n_layers):
+            self.weight_dict.update({'W_gc_%d'%k: nn.Parameter(initializer(torch.empty(layers[k], layers[k+1])))})
+            self.weight_dict.update({'b_gc_%d'%k: nn.Parameter(initializer(torch.empty(1, layers[k+1])))})
+            self.weight_dict.update({'W_bi_%d'%k: nn.Parameter(initializer(torch.empty(layers[k], layers[k+1])))})
+            self.weight_dict.update({'b_bi_%d'%k: nn.Parameter(initializer(torch.empty(1, layers[k+1])))})
+            
+        self.f = nn.Sigmoid()
+        world.LOGGER.info('use xavier initilizer')
+    
+    def sparse_dropout(self, x, rate, noise_shape):
+        random_tensor = 1 - rate
+        random_tensor += torch.rand(noise_shape).to(x.device)
+        dropout_mask = torch.floor(random_tensor).type(torch.bool)
+        i = x._indices()
+        v = x._values()
+
+        i = i[:, dropout_mask]
+        v = v[dropout_mask]
+
+        out = torch.sparse.FloatTensor(i, v, x.shape).to(x.device)
+        return out * (1. / (1 - rate))
+    
+    def computer(self):
+        users_emb = self.embedding_user.weight
+        items_emb = self.embedding_item.weight
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+
+        g_droped = self.Graph 
+        # if self.training:
+        #     g_droped = self.sparse_dropout(g_droped,
+        #                             0.1,
+        #                             g_droped._nnz()) 
+        
+        for layer in range(self.n_layers):
+            side_embeddings = torch.sparse.mm(g_droped, all_emb)
+            
+            # transformed sum messages of neighbors.
+            sum_embeddings = torch.matmul(side_embeddings, self.weight_dict['W_gc_%d' % layer]) \
+                                             + self.weight_dict['b_gc_%d' % layer]
+                                             
+            # bi messages of neighbors.
+            # element-wise productj
+            bi_embeddings = torch.mul(all_emb, side_embeddings)
+            # transformed bi messages of neighbors.
+            bi_embeddings = torch.matmul(bi_embeddings, self.weight_dict['W_bi_%d' % layer]) \
+                                            + self.weight_dict['b_bi_%d' % layer]
+
+            # non-linear activation.
+            all_emb = nn.LeakyReLU(negative_slope=0.2)(sum_embeddings + bi_embeddings)
+
+            # message dropout.
+            # all_emb = nn.Dropout(0.1)(all_emb)
+
+            # normalize the distribution of embeddings.
+            norm_embeddings = F.normalize(all_emb, p=2, dim=1)
+            embs.append(norm_embeddings)
+
+        out = torch.cat(embs, 1)
+        users, items = torch.split(out, [self.num_users, self.num_items])
+        return users, items
+
+    def get_users_rating(self, users):
+        all_users, all_items = self.computer()
+        users_emb = all_users[users.long()]
+        items_emb = all_items
+        rating = self.f(torch.matmul(users_emb, items_emb.t()))
+        return rating   
+        
+    def get_embedding(self, users, pos_items, neg_items):
+        all_users, all_items = self.computer()
+        users_emb = all_users[users]
+        pos_emb = all_items[pos_items]
+        neg_emb = all_items[neg_items]
+        users_emb_ego = self.embedding_user(users)
+        pos_emb_ego = self.embedding_item(pos_items)
+        neg_emb_ego = self.embedding_item(neg_items)
+        return users_emb, pos_emb, neg_emb, users_emb_ego, pos_emb_ego, neg_emb_ego
+
+    def bpr_loss(self, users, pos, neg):
+        (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0) = self.get_embedding(
+            users.long(), pos.long(), neg.long()
+        )
+        reg_loss = (
+            (1 / 2) * (user_emb_0.norm(2).pow(2) + pos_emb_0.norm(2).pow(2) + neg_emb_0.norm(2).pow(2)) / float(len(users))
+        )
+        pos_scores = torch.mul(users_emb, pos_emb)
+        pos_scores = torch.sum(pos_scores, dim=1)
+        neg_scores = torch.mul(users_emb, neg_emb)
+        neg_scores = torch.sum(neg_scores, dim=1)
+
+        loss = torch.mean(torch.nn.functional.softplus(torch.clamp(neg_scores - pos_scores, min=1e-8, max=1)))
+
+        return loss, reg_loss
+    
+
+class GCCF(nn.Module):
+    def __init__(self, config: dict, dataset):
+        super(GCCF, self).__init__()
+        self.config = config
+        self.dataset = dataset
+        
+        self.__init_weight()
+        self.Graph = self.dataset.get_sparse_graph_gccf()
+        world.LOGGER.info(f"use self-loop normalized Graph(dropout:{self.config['dropout']})")
+
+    def __init_weight(self):
+        self.num_users = self.dataset.n_users
+        self.num_items = self.dataset.m_items
+        self.latent_dim = self.config["latent_dim_rec"]
+        self.n_layers = self.config["n_layers"]
+
+        self.embedding_user = torch.nn.Embedding(num_embeddings=self.num_users, embedding_dim=self.latent_dim)
+        self.embedding_item = torch.nn.Embedding(num_embeddings=self.num_items, embedding_dim=self.latent_dim)
+        nn.init.xavier_uniform_(self.embedding_user.weight, gain=1)
+        nn.init.xavier_uniform_(self.embedding_item.weight, gain=1)
+                
+        initializer = nn.init.xavier_uniform_        
+        self.weight_dict = nn.ParameterDict()
+        layers = [self.latent_dim for i in range(self.n_layers)] + [self.latent_dim]
+        for k in range(self.n_layers):
+            self.weight_dict.update({'W_gc_%d'%k: nn.Parameter(initializer(torch.empty(layers[k], layers[k+1])))})
+            self.weight_dict.update({'b_gc_%d'%k: nn.Parameter(initializer(torch.empty(1, layers[k+1])))})
+
+        self.f = nn.Sigmoid()
+        world.LOGGER.info('use xavier initilizer')
+        
+    def computer(self):
+        users_emb = self.embedding_user.weight
+        items_emb = self.embedding_item.weight
+        all_emb = torch.cat([users_emb, items_emb])
+        embs = [all_emb]
+
+        g_droped = self.Graph
+        
+        for layer in range(self.n_layers):
+            # all_emb = torch.sparse.mm(g_droped, all_emb) 
+            # all_emb = torch.matmul(all_emb, self.weight_dict['W_gc_%d' % layer]) \
+            #                                  + self.weight_dict['b_gc_%d' % layer]
+                                       
+            all_emb = torch.sparse.mm(g_droped, all_emb) #+ all_emb.mul(self.Degree)
+            embs.append(all_emb)
+
+        out = torch.cat(embs, 1)
+        users, items = torch.split(out, [self.num_users, self.num_items])
+        return users, items
+    
+    def get_users_rating(self, users):
+        all_users, all_items = self.computer()
+        users_emb = all_users[users.long()]
+        items_emb = all_items
+        rating = self.f(torch.matmul(users_emb, items_emb.t()))
+        return rating   
+        
+    def get_embedding(self, users, pos_items, neg_items):
+        all_users, all_items = self.computer()
+        users_emb = all_users[users]
+        pos_emb = all_items[pos_items]
+        neg_emb = all_items[neg_items]
+        users_emb_ego = self.embedding_user(users)
+        pos_emb_ego = self.embedding_item(pos_items)
+        neg_emb_ego = self.embedding_item(neg_items)
+        return users_emb, pos_emb, neg_emb, users_emb_ego, pos_emb_ego, neg_emb_ego
+
+    def bpr_loss(self, users, pos, neg):
+        (users_emb, pos_emb, neg_emb, user_emb_0, pos_emb_0, neg_emb_0) = self.get_embedding(
+            users.long(), pos.long(), neg.long()
+        )
+        reg_loss = (
+            (1 / 2) * (user_emb_0.norm(2).pow(2) + pos_emb_0.norm(2).pow(2) + neg_emb_0.norm(2).pow(2)) / float(len(users))
+        )
+        pos_scores = torch.mul(users_emb, pos_emb)
+        pos_scores = torch.sum(pos_scores, dim=1)
+        neg_scores = torch.mul(users_emb, neg_emb)
+        neg_scores = torch.sum(neg_scores, dim=1)
+
+        loss = torch.mean(torch.nn.functional.softplus(torch.clamp(neg_scores - pos_scores, min=1e-8, max=1)))
+
+        return loss, reg_loss

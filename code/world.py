@@ -82,7 +82,7 @@ def set_config():
     all_dataset = ["yelp2018", "ml-1m", "ks10"]
     if args.dataset not in all_dataset:
         raise NotImplementedError(f"Haven't supported {args.dataset} yet!, try {all_dataset}")
-    all_models = ["rgcn", "rgcf"]
+    all_models = ["rgcn", "rgcf", "lgcn", "ngcf", "gccf"]
     if args.model not in all_models:
         raise NotImplementedError(f"Haven't supported {args.model} yet!, try {all_models}")
     return config
