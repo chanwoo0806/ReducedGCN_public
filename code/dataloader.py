@@ -159,6 +159,49 @@ class Loader(Dataset):
             world.LOGGER.info("don't split the matrix")
 
         return self.Graph
+    
+    def get_sparse_graph_gccf(self):
+        """
+        build a graph in torch.sparse.IntTensor.
+        Details in NGCF's matrix form
+        A =
+            |I,   R|
+            |R^T, I|
+        """
+        world.LOGGER.info("loading adjacency matrix")
+        if self.Graph is None:
+            try:
+                self.Graph = torch.load(self.path + "/s_pre_adj_mat_tensor_gccf.pt")
+                world.LOGGER.info("successfully loaded...")
+            except:
+                world.LOGGER.info("generating adjacency matrix")
+                start = time()
+                adj_mat = sp.dok_matrix((self.n_users + self.m_items, self.n_users + self.m_items), dtype=np.float32)
+                adj_mat = adj_mat.tolil()
+                R = self.user_item_net.tolil()
+                adj_mat[: self.n_users, self.n_users :] = R
+                adj_mat[self.n_users :, : self.n_users] = R.T
+                adj_mat = adj_mat.todok()
+                adj_mat = adj_mat + sp.eye(adj_mat.shape[0])
+
+                rowsum = np.array(adj_mat.sum(axis=1)) ### 
+                d_inv = np.power(rowsum, -0.5).flatten()
+                d_inv[np.isinf(d_inv)] = 0.0
+                d_mat = sp.diags(d_inv)
+
+                norm_adj = d_mat.dot(adj_mat)
+                norm_adj = norm_adj.dot(d_mat)
+                norm_adj = norm_adj.tocsr()
+
+                self.Graph = self._convert_sp_mat_to_sp_tensor(norm_adj) # D^(-1/2) A D^(1/2) -> (A+I)
+                torch.save(self.Graph, self.path + "/s_pre_adj_mat_tensor_gccf.pt")
+                end = time()
+                world.LOGGER.info(f"costing {end-start}s, saved norm_mat...")
+                
+            self.Graph = self.Graph.coalesce().to(world.config["device"])
+            world.LOGGER.info("don't split the matrix")
+
+        return self.Graph
 
     def build_test(self):
         """
