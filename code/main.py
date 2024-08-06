@@ -11,7 +11,8 @@ import datetime
 
 
 def load_model(model_name):
-    models = {"rgcn": model.RGCN}
+    models = {"rgcn": model.RGCN, "rgcf": model.RGCF, "lgcn": model.LightGCN, "ngcf": model.NGCF, "gccf": model.GCCF,
+              "afd_lgcn": model.AFD_LightGCN, "afd_ngcf": model.AFD_NGCF, "afd_gccf": model.AFD_GCCF}
     return models[model_name]
 
 

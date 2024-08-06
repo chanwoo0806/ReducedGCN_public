@@ -72,11 +72,20 @@ def set_config():
     config["emb_weight"] = args.emb_weight
     config["temp"] = args.temp
     config["groups"] = args.groups
+    
+    #RGCF
+    config["prune_threshold"] = args.prune_threshold
+    config["MIM_weight"] = args.MIM_weight
+    config["tau"] = args.tau
+    config["aug_ratio"] = args.aug_ratio
+    
+    #AFD
+    config["alpha"] = args.alpha
 
     all_dataset = ["yelp2018", "ml-1m", "ks10"]
     if args.dataset not in all_dataset:
         raise NotImplementedError(f"Haven't supported {args.dataset} yet!, try {all_dataset}")
-    all_models = ["rgcn"]
+    all_models = ["rgcn", "rgcf", "lgcn", "ngcf", "gccf", "afd_lgcn", "afd_ngcf", "afd_gccf"]
     if args.model not in all_models:
         raise NotImplementedError(f"Haven't supported {args.model} yet!, try {all_models}")
     return config
@@ -97,7 +106,7 @@ U |  _"\ u \| ___"|/|  _"\ U |"|u| |U /"___|\| ___"|/|  _"\ U /"___|uU /"___|| \
 ROOT_PATH = os.path.dirname(os.path.dirname(__file__))
 CODE_PATH = os.path.join(ROOT_PATH, "code")
 DATA_PATH = os.path.join(ROOT_PATH, "data")
-BOARD_PATH = os.path.join(CODE_PATH, "runs")
+BOARD_PATH = os.path.join(ROOT_PATH, "runs")
 if args.load:
     FOLDER_PATH = os.path.join(
         BOARD_PATH, os.path.join(args.dataset, os.path.join(args.model, args.load))
@@ -108,7 +117,7 @@ else:
             BOARD_PATH,
             os.path.join(args.dataset, os.path.join(args.model, time.strftime("%m-%d-%Hh%Mm%Ss"))),
         )
-        + f"-l{args.layer}-d{args.recdim}-g{args.groups}-{args.comment}"
+        + f"-l{args.layer}-{args.comment}"
     )
 LOGGER = get_logger(args.dataset, FOLDER_PATH)
 
