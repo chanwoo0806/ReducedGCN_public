@@ -117,7 +117,7 @@ else:
             BOARD_PATH,
             os.path.join(args.dataset, os.path.join(args.model, time.strftime("%m-%d-%Hh%Mm%Ss"))),
         )
-        + f"-l{args.layer}-d{args.recdim}-g{args.groups}-{args.comment}"
+        + f"-l{args.layer}-{args.comment}"
     )
 LOGGER = get_logger(args.dataset, FOLDER_PATH)
 

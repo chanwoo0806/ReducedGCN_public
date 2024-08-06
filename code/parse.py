@@ -16,7 +16,7 @@ def parse_args():
     parser.add_argument(
         "--config_file", type=str, default=None, help="Path to the configuration file."
     )
-    parser.add_argument("--model", type=str, default="rgcn")
+    parser.add_argument("--model", type=str)
     parser.add_argument(
         "--dataset",
         type=str,
@@ -80,7 +80,7 @@ def parse_args():
     parser.add_argument("--aug_ratio", type=float, default=0.1)
     
     #AFD
-    parser.add_argument("--alpha", type=float, default=0.1)
+    parser.add_argument("--alpha", type=float, default=1e-4)
 
     args = parser.parse_args()
 
